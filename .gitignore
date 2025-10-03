@@ -1,4 +1,7 @@
-example_simulations/output/*
+**/output/**
 
 *.dat
 *.clean
+
+.snakemake/
+

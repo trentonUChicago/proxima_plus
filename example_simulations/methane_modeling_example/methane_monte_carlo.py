@@ -4,6 +4,9 @@ import os
 module_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'proxima_plus'))
 sys.path.append(module_dir)
 
+script_path = os.path.abspath(__file__)
+script_dir = os.path.dirname(script_path)
+
 import time
 import json
 from datetime import datetime
@@ -15,8 +18,13 @@ from scipy.stats import bayes_mvs
 from ase.calculators.psi4 import Psi4
 from sklearn.linear_model import BayesianRidge
 
+# For reading data
+import gzip
+from ase.io import read
+from io import StringIO
+
 # From my files
-from utils import create_atoms, make_data_pipeline, radius_of_gyration
+from utils import make_data_pipeline, radius_of_gyration
 from ensemble import DeepEnsembleSurrogate
 from control import ControlWrapper
 from visualize import create_error_plot
@@ -33,7 +41,21 @@ _fidelity = {
 }
 
 
-def run_mc(num_steps, temp, acceptable_error, target_model, run_name, control_params = {}, surrogate_params = {}, verbose = False):
+def create_atoms(mol_index = 1):
+    qm9_path = f"{script_dir}/data/g4mp2_data.json.gz"
+    with gzip.open(qm9_path, 'rt') as fp:
+        for _, d in zip(range(mol_index), fp):
+            pass
+        mol_info = json.loads(d)
+
+    atoms = read(StringIO(mol_info['xyz']), index=0, format='xyz')
+
+    return atoms
+
+
+
+
+def run_mc(num_steps, temp, acceptable_error, target_model, run_name, trial_num, control_params = {}, surrogate_params = {}, verbose = False):
 
     # Initialize results
     r_g = []
@@ -141,8 +163,8 @@ def run_mc(num_steps, temp, acceptable_error, target_model, run_name, control_pa
 
 
     # Create Directory
-    current_time = datetime.utcnow().strftime("%d%b%y-%H%M%S")
-    directory_path = f"../output/runs/{run_name}/{run_name}_temp{temp}_{current_time}/"
+    # current_time = datetime.utcnow().strftime("%d%b%y-%H%M%S")
+    directory_path = f"{script_dir}/output/runs/{run_name}/{run_name}_temp{int(temp)}_trial{trial_num}/"
     os.makedirs(directory_path, exist_ok=True)
 
     # Add JSON results to directory
@@ -168,19 +190,21 @@ if __name__ == "__main__":
     arg_parser = ArgumentParser()
     arg_parser.add_argument('--run-name', '-n', help='Name of run and determines the save directory',
                             default='testing', type=str)
+    arg_parser.add_argument('--trial', '-i', help='Trial Number',
+                            default=1, type=int)
     arg_parser.add_argument('--temp', '-T', help='Temperature at which to sample (K).'
                                                  'Default is 298 (room temperature)', default=298, type=float)
     arg_parser.add_argument('--nsteps', '-t', help='Number of Monte Carlo steps', default=1000, type=int)
     arg_parser.add_argument('--acceptable-error', '-a', help='Threshold for Acceptable Surrogate Error',
                             default=0.002, type=float)
     arg_parser.add_argument('--fidelity', '-f', help='Controls the accuracy/cost of the quantum chemistry code',
-                            default='low', choices=['low', 'medium', 'high'], type=str)
+                            default='low', choices=['low', 'medium', 'high'], type=str)                       
 
     
     args = arg_parser.parse_args()
 
     # Create DFT target model
-    calc = Psi4(memory="500MB", PSI_SCRATCH="../output/tmp/", **_fidelity[args.fidelity])
+    calc = Psi4(memory="500MB", PSI_SCRATCH="{script_dir}/output/tmp/", **_fidelity[args.fidelity])
 
 
-    run_mc(args.nsteps, args.temp, args.acceptable_error, calc, args.run_name, control_params = {}, surrogate_params = {}, verbose = False)
+    run_mc(args.nsteps, args.temp, args.acceptable_error, calc, args.run_name, args.trial, control_params = {}, surrogate_params = {}, verbose = False)

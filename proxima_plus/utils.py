@@ -8,13 +8,6 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from typing import Optional
 from sklearn.pipeline import Pipeline
 
-# For reading data
-import gzip
-import json
-from io import StringIO
-from ase.io import read
-
-
 def make_data_pipeline(soap_kwargs=None, kernel_kwargs=None):
     """Creates data pipeline to be used in ensemble"""
     soap_kwargs   = soap_kwargs   or {}
@@ -31,19 +24,6 @@ def radius_of_gyration(atoms):
     m = atoms.get_masses()
 
     return np.dot(m, disp) / np.sum(m)
-
-
-def create_atoms(mol_index = 1):
-    qm9_path = "data/g4mp2_data.json.gz"
-    with gzip.open(qm9_path, 'rt') as fp:
-        for _, d in zip(range(mol_index), fp):
-            pass
-        mol_info = json.loads(d)
-
-    atoms = read(StringIO(mol_info['xyz']), index=0, format='xyz')
-
-    return atoms
-
 
 def scalable_kernel(mol_a: np.ndarray, mol_b: np.ndarray, gamma: float = 1.0) -> float:
     """Compute the scalable kernel between molecules
