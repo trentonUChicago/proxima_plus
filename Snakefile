@@ -1,4 +1,4 @@
-##### Runs the Methane Monte Carlo Simulation Example #####
+##### Runs a Monte Carlo Simulation Example #####
 
 
 # Run Parameters
@@ -26,8 +26,9 @@ rule monte_carlo:
     params:
         scratch="example_simulations/single_molecule_modeling_example/output/tmp/{run_name}_T{temp}_trial{trial}",
         run_name="{run_name}",
-        temp="{temp}",
         trial="{trial}",
+        molecule_name="{molecule_name}",
+        temp="{temp}",
         acceptable_error = 0 if run_name == "baseline" else 0.002
     threads: 1
     shell:
@@ -37,6 +38,7 @@ rule monte_carlo:
         python example_simulations/single_molecule_modeling_example/single_molecule_monte_carlo.py \
             --run-name {params.run_name} \
             --trial {params.trial} \
+            --molecule {params.molecule_name} \
             --temp {params.temp} \
             --acceptable-error {params.acceptable_error}
         rmdir {params.scratch}
