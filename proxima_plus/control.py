@@ -71,7 +71,7 @@ class ControlWrapper:
         """Runs surrogate model as an ensemble and return means and variances"""
 
         # If there is not enough data to initialize the surrogate model, then just run target model
-        if len(self.results["X"]) < self.initial_surrogate_data:
+        if (len(self.results["X"]) < self.initial_surrogate_data) or (self.acceptable_error <= 0):
             return None, None, None
     
         # See if we need to train/retrain surrogate model
