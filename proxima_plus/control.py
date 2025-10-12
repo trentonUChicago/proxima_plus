@@ -7,8 +7,8 @@ class ControlWrapper:
     """Control Model that manages when to use target or surrogate model"""
 
     def __init__(self, target_function, surrogate, acceptable_error, initial_surrogate_data = 20, 
-                 initial_error_data = 20, retrain_interval=10, error_prediction_type=None, 
-                 sliding_window_size = 10):
+                 initial_error_data = 20, retrain_interval=None, error_prediction_type=None, 
+                 sliding_window_size = 10, prediction_window_size = 0):
         """
         target_function is the actual target model
         surrogate_class is assumed to be a class that an instance can be created with
@@ -20,22 +20,26 @@ class ControlWrapper:
 
         # Set Controller Variables
         self.acceptable_error = acceptable_error # Set error threshold for surrogate error
+        self.disable_surrogate = acceptable_error == 0 
         self.surrogate_initialized = False
         self.initial_surrogate_data = initial_surrogate_data
         self.initial_error_data = initial_error_data
         self.retrain_interval = retrain_interval
+
         
         # History
         self.num_runs = 0
         self.was_target_ran = False
-        self.results = {"X": [], "y_target": [], "y_prediction": [], "epistemic_uncertainty": [], "aleatory_uncertainty": [], "coefficient_of_determination": []}
-        self.training_data = []
+        self.results = {"X": [], "y_target": [], "y_prediction": [], "epistemic_uncertainty": [], "aleatory_uncertainty": [], 
+                        "coefficient_of_determination": [], "acceptable_surrogate_error": [], "surrogate_error_prediction": []}
         self.retraining_times = []
+        self.last_retrain_data_size = 0
 
         # Variables for the error prediction
         self.error_model = LinearRegression()
         self.error_prediction_type = error_prediction_type
         self.error_training_size = 0
+        self.prediction_window_size = prediction_window_size # Number of the most recent values used to train error predictor
         self.sliding_window_size = sliding_window_size
         self.error_sliding_window = {"surrogate_error": [], "epistemic_uncertainty": [], "aleatory_uncertainty": []} # Temp window where values are added and removed
         self.error_prediction_vals = {"surrogate_error": [], "epistemic_uncertainty": [], "aleatory_uncertainty": []}
@@ -55,6 +59,7 @@ class ControlWrapper:
             # Check error prediction with threshold
             use_surrogate = error_pred < self.acceptable_error
         else:
+            error_pred = None
             use_surrogate = False
 
         # Run Target Model
@@ -63,7 +68,7 @@ class ControlWrapper:
             target_value = self.run_target_model(x)    
 
         # Update results history and data
-        self.record_info(x, target_value, surrogate_value, epistemic_uncertainty, aleatory_uncertainty)
+        self.record_info(x, target_value, surrogate_value, epistemic_uncertainty, aleatory_uncertainty, error_pred)
         
         return (surrogate_value if use_surrogate else target_value), use_surrogate
 
@@ -71,7 +76,7 @@ class ControlWrapper:
         """Runs surrogate model as an ensemble and return means and variances"""
 
         # If there is not enough data to initialize the surrogate model, then just run target model
-        if (len(self.results["X"]) < self.initial_surrogate_data) or (self.acceptable_error <= 0):
+        if (len(self.results["X"]) < self.initial_surrogate_data) or self.disable_surrogate:
             return None, None, None
     
         # See if we need to train/retrain surrogate model
@@ -79,6 +84,12 @@ class ControlWrapper:
             self.retrain_surrogate()
             self.surrogate_initialized = True
             self.was_target_ran = False
+        elif self.retrain_interval is None:
+            X, _ = self.get_surrogate_training_data()
+            if self.was_target_ran and (((self.last_retrain_data_size < 100) and (len(X) % 10 == 0)) or \
+               ((self.last_retrain_data_size >= 100) and (self.last_retrain_data_size * 1.1 < len(X)))):
+                self.retrain_surrogate()
+                self.was_target_ran = False
         elif (self.num_runs % self.retrain_interval == 0) and self.was_target_ran:
             self.retrain_surrogate()
             self.was_target_ran = False
@@ -96,6 +107,7 @@ class ControlWrapper:
         self.surrogate.fit(X, y_target)
         end_time = time.time()
         # Save surrogate retraining time
+        self.last_retrain_data_size = len(X)
         self.retraining_times.append({"run_num": self.num_runs, "data_length": len(X), "run_time": end_time - start_time})
     
     def get_surrogate_training_data(self):
@@ -126,9 +138,9 @@ class ControlWrapper:
             self.error_training_size = len(self.error_prediction_vals["surrogate_error"])
 
             # Get values
-            surrogate_errors = self.error_prediction_vals["surrogate_error"]
-            epistemic_errors = self.error_prediction_vals["epistemic_uncertainty"]
-            aleatory_errors = self.error_prediction_vals["aleatory_uncertainty"]
+            surrogate_errors = self.error_prediction_vals["surrogate_error"][-self.prediction_window_size:]
+            epistemic_errors = self.error_prediction_vals["epistemic_uncertainty"][-self.prediction_window_size:]
+            aleatory_errors = self.error_prediction_vals["aleatory_uncertainty"][-self.prediction_window_size:]
 
             # Pair uncertainties together
             uncertainties = np.array([list(pair) for pair in zip(epistemic_errors, aleatory_errors)])
@@ -143,7 +155,7 @@ class ControlWrapper:
 
         return surrogate_error_pred
 
-    def record_info(self, x, target_value, surrogate_value=None, epistemic=None, aleatory=None):
+    def record_info(self, x, target_value, surrogate_value=None, epistemic=None, aleatory=None, error_pred=None):
         """Simply saves information about the values and uncertainties over time"""
         self.results["X"].append(x)
         self.results["y_target"].append(target_value)
@@ -151,6 +163,8 @@ class ControlWrapper:
         self.results["epistemic_uncertainty"].append(epistemic)
         self.results["aleatory_uncertainty"].append(aleatory)
         self.results["coefficient_of_determination"].append(self.r_squared)
+        self.results["acceptable_surrogate_error"].append(self.acceptable_error)
+        self.results["surrogate_error_prediction"].append(error_pred)
 
         # If we can find surrogate error, use to update sliding window for error prediction
         if (target_value is not None) and (surrogate_value is not None):
@@ -182,3 +196,5 @@ class ControlWrapper:
             else:
                 self.error_prediction_vals["surrogate_error"].append(np.mean(self.error_sliding_window["surrogate_error"]))
         
+    def update_threshold(self, kT, final_error_bound, max_final_value_change):
+        self.acceptable_error = kT * np.log(1 + final_error_bound/max_final_value_change)
