@@ -25,6 +25,12 @@ def radius_of_gyration(atoms):
 
     return np.dot(m, disp) / np.sum(m)
 
+def get_atom_key(atoms):
+    """Gets a hashable key to represent an atom object"""
+    pos = np.round(atoms.get_positions(), decimals=6)
+    symbols = atoms.get_chemical_symbols()
+    return tuple(zip(symbols, map(tuple, pos)))
+
 def scalable_kernel(mol_a: np.ndarray, mol_b: np.ndarray, gamma: float = 1.0) -> float:
     """Compute the scalable kernel between molecules
 
@@ -53,12 +59,24 @@ class SOAPConverter(BaseEstimator, TransformerMixin):
         super().__init__()
         self.soap = SOAP(r_cut=rcut, n_max=nmax, l_max=lmax, species=sorted(species))
 
+        self.previous_results = {}
+
     def fit(self, X, y=None):
         self.fitted_ = True
         return self
 
     def transform(self, X, y=None):
-        return [self.soap.create(x) for x in X]
+        result = []
+        for x in X:
+            atom_key = get_atom_key(x)
+            if atom_key in self.previous_results:
+                result.append(self.previous_results[atom_key])
+            else:
+                mat = self.soap.create(x)
+                result.append(mat)
+                self.previous_results[atom_key] = mat
+                
+        return result
 
 
 class ScalableKernel(BaseEstimator, TransformerMixin):

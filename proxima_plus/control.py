@@ -8,7 +8,7 @@ class ControlWrapper:
 
     def __init__(self, target_function, surrogate, acceptable_error, initial_surrogate_data = 20, 
                  initial_error_data = 20, retrain_interval=None, error_prediction_type=None, 
-                 sliding_window_size = 10, prediction_window_size = 0):
+                 sliding_window_size = 10, prediction_window_size = 0, epsilon = 0.1):
         """
         target_function is the actual target model
         surrogate_class is assumed to be a class that an instance can be created with
@@ -25,6 +25,7 @@ class ControlWrapper:
         self.initial_surrogate_data = initial_surrogate_data
         self.initial_error_data = initial_error_data
         self.retrain_interval = retrain_interval
+        self.epsilon = epsilon # Chance of running target model anyways
 
         
         # History
@@ -64,8 +65,9 @@ class ControlWrapper:
 
         # Run Target Model
         target_value = None
-        if not(use_surrogate):
-            target_value = self.run_target_model(x)    
+        if not(use_surrogate) or (np.random.random() < self.epsilon):
+            target_value = self.run_target_model(x)
+            use_surrogate = False
 
         # Update results history and data
         self.record_info(x, target_value, surrogate_value, epistemic_uncertainty, aleatory_uncertainty, error_pred)
@@ -197,4 +199,5 @@ class ControlWrapper:
                 self.error_prediction_vals["surrogate_error"].append(np.mean(self.error_sliding_window["surrogate_error"]))
         
     def update_threshold(self, kT, final_error_bound, max_final_value_change):
-        self.acceptable_error = kT * np.log(1 + final_error_bound/max_final_value_change)
+        if max_final_value_change > 0:
+            self.acceptable_error = kT * np.log(1 + final_error_bound/max_final_value_change)

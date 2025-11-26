@@ -15,8 +15,13 @@ import pandas as pd
 from argparse import ArgumentParser
 from scipy.stats import bayes_mvs
 
+import psi4
 from ase.calculators.psi4 import Psi4
 from sklearn.linear_model import BayesianRidge
+
+
+# Silence all output from Psi4.
+psi4.core.be_quiet()
 
 # For reading data
 from ase.io import read
@@ -41,21 +46,84 @@ _fidelity = {
 }
 
 
-def get_pubchem_molecule(name):
+## For bond rotations
+from bond_rotation import get_initial_structure, detect_dihedrals
+SMILES_MAP = {
+    "methane": "C",
+    "ethanol": "CCO",
+    "butane":  "CCCC",
+    "hexane":  "CCCCCC",
+}
+def init_atoms_and_dihedrals(molecule_name):
+    """
+    Return (atoms, dihedrals_list) for the given molecule
+    """
+
+    if molecule_name.lower() in SMILES_MAP:
+        smiles = SMILES_MAP[molecule_name.lower()]
+        atoms, mol = get_initial_structure(smiles)
+        dihedrals = detect_dihedrals(mol)
+    else:
+        atoms = get_pubchem_molecule(molecule_name)
+        dihedrals = []
+
+    return atoms, dihedrals
+def propose_move(atoms, dihedrals, rng, perturb_stdev, rotation_prob=0.5, torsion_step=30.0):
+    """
+    Propose a new configuration:
+      - With probability rotation_prob: random dihedral rotation
+      - Otherwise: small Cartesian rattle (your old behavior)
+
+    dihedrals: list of DihedralInfo from setup.detect_dihedrals
+    rng: numpy RandomState
+    """
+    new_atoms = atoms.copy()
+
+    # If we don't have any dihedrals (e.g., methane), always do rattle
+    if not dihedrals or rng.rand() > rotation_prob:
+        new_atoms.rattle(stdev=perturb_stdev, rng=rng)
+        return new_atoms
+
+    # Pick a random dihedral
+    dih = dihedrals[rng.randint(len(dihedrals))]
+
+    # Current angle (degrees)
+    current_angle = dih.get_angle(new_atoms)  # uses Atoms.get_dihedral under the hood
+
+    # Propose new angle: random increment around current
+    delta = rng.normal(loc=0.0, scale=torsion_step)  # e.g. ~30° changes
+    new_angle = current_angle + delta
+
+    # Build mask of atoms that should rotate
+    mask = [i in dih.group for i in range(len(new_atoms))]
+
+    # Apply rotation; ASE will rotate that whole group about the dihedral
+    # a1, a2, a3, a4 = dih.chain
+    new_atoms.set_dihedral(*dih.chain, new_angle, mask=mask)
+
+    return new_atoms
+## For bond rotations
+
+
+
+
+def get_pubchem_molecule(name, max_retries=100):
     """Download 3D coordinates of molecule from PubChem"""
     url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{name}/SDF?record_type=3d"
-    response = requests.get(url)
-    response.raise_for_status()
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            # Convert to ASE atoms
+            atoms = read(StringIO(response.text), format='sdf')
+            return atoms
+        except requests.exceptions.RequestException as e:
+            print(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(10) # Wait before retrying
 
-    # Convert to ASE atoms
-    atoms = read(StringIO(response.text), format='sdf')
 
-    return atoms
-
-
-
-
-def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_name, trial_num, adaptive_threshold, control_params = {}, surrogate_params = {}, verbose = False):
+def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_name, trial_num, adaptive_threshold, rotation_prob, control_params = {}, surrogate_params = {}, verbose = False):
 
     # Initialize results
     r_g = []
@@ -69,13 +137,14 @@ def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_n
     start_time = time.time()
     
     # Get atoms
-    atoms = get_pubchem_molecule(molecule_name)
+    # atoms = get_pubchem_molecule(molecule_name)
+    atoms, dihedrals = init_atoms_and_dihedrals(molecule_name)
 
     # Set kT
     kT = 3.1668115635e-6 * temp
 
     # Create data pipeline, surrogate model, and control model
-    data_pipeline = make_data_pipeline()
+    data_pipeline = make_data_pipeline(soap_kwargs={'species': frozenset(atoms.get_chemical_symbols())})
     surrogate = DeepEnsembleSurrogate(BayesianRidge, data_pipeline, **surrogate_params)
 
     # Get initial energy
@@ -86,8 +155,9 @@ def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_n
 
 
     for step in range(num_steps):
-        new_atoms = atoms.copy()
-        new_atoms.rattle(stdev=PERTURB, rng=rng)
+        # new_atoms = atoms.copy()
+        # new_atoms.rattle(stdev=PERTURB, rng=rng)
+        new_atoms = propose_move(atoms, dihedrals, rng, perturb_stdev=PERTURB)
         
 
         # Calculate energy
@@ -113,7 +183,7 @@ def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_n
         new_energies.append(new_energy)
         accept_probs.append(prob)
 
-        if adaptive_threshold:
+        if adaptive_threshold is True:
             if len(r_g) > 2:
                 max_rog_change = np.max(np.abs(np.diff(r_g)))
                 target_model.get_potential_energy.update_threshold(kT, acceptable_error, max_rog_change)
@@ -205,17 +275,20 @@ if __name__ == "__main__":
                             default="methane", type=str)
     arg_parser.add_argument('--temp', '-T', help='Temperature at which to sample (K).'
                                                  'Default is 298 (room temperature)', default=298, type=float)
-    arg_parser.add_argument('--nsteps', '-t', help='Number of Monte Carlo steps', default=1000, type=int)
+    arg_parser.add_argument('--nsteps', '-t', help='Number of Monte Carlo steps', default=5000, type=int)
     arg_parser.add_argument('--acceptable-error', '-a', help='Threshold for Acceptable Surrogate Error or Final Error if using adaptive threshold',
                             default=0.002, type=float)
+    arg_parser.add_argument('--epsilon', '-e', help='Chance for the control model to run the target model anyways',
+                            default=0.1, type=float)
+    arg_parser.add_argument('--rotation-prob', '-R', help='Probability of proposing a diheral rotation instead of a cartesian rattle.', default=0.5, type=float)
     arg_parser.add_argument('--retrain-interval', '-r', help='Retraining interval for surrogate model',
                             default=None, type=int)
     arg_parser.add_argument('--prediction-window-size', '-p', help='Size of the prediction window that takes the most recent results to train surrogate error predictor',
                             default=0, type=int)
     arg_parser.add_argument('--max-surrogate-training-size', '-u', help='Maximum amount of training data for surrogate to use',
                             default=None, type=int)
-    arg_parser.add_argument('--adaptive-threshold', '-s', help='Decides whether to adaptively set surrogate error threshold or not',
-                            default=False, type=bool)
+    arg_parser.add_argument('--adaptive-threshold', '-s', action='store_true', help='Decides whether to adaptively set surrogate error threshold or not',
+                            default=False)
     arg_parser.add_argument('--fidelity', '-f', help='Controls the accuracy/cost of the quantum chemistry code',
                             default='low', choices=['low', 'medium', 'high'], type=str)                      
 
@@ -225,7 +298,6 @@ if __name__ == "__main__":
     # Create DFT target model
     calc = Psi4(memory="500MB", PSI_SCRATCH="{script_dir}/output/tmp/", **_fidelity[args.fidelity])
 
-
-    run_mc(args.molecule, args.nsteps, args.temp, args.acceptable_error, calc, args.run_name, args.trial, args.adaptive_threshold,
-           control_params = {'retrain_interval': args.retrain_interval, 'prediction_window_size': args.prediction_window_size}, 
+    run_mc(args.molecule, args.nsteps, args.temp, args.acceptable_error, calc, args.run_name, args.trial, args.adaptive_threshold, rotation_prob=rgs.rotation_prob,
+           control_params = {'retrain_interval': args.retrain_interval, 'prediction_window_size': args.prediction_window_size, 'epsilon': args.epsilon}, 
            surrogate_params = {'max_data': args.max_surrogate_training_size}, verbose = False)
