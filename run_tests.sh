@@ -74,9 +74,11 @@
 # snakemake --cores 10 --config run_name=control_adaptive_threshold molecule=ethanol adaptive_threshold=True
 # snakemake --cores 10 --config run_name=control_adaptive_threshold molecule=butane adaptive_threshold=True
 
-snakemake --cores 10 --config run_name=baseline_5000 run_type=baseline molecule=ethanol
-snakemake --cores 10 --config run_name=baseline_5000 run_type=baseline molecule=butane
-snakemake --cores 10 --config run_name=baseline_5000 run_type=baseline molecule=hexane
-snakemake --cores 10 --config run_name=control_5000 run_type=normal molecule=ethanol prediction_window_size=300 max_surrogate_training_size=300
-snakemake --cores 10 --config run_name=control_5000 run_type=normal molecule=butane prediction_window_size=300 max_surrogate_training_size=300
-snakemake --cores 10 --config run_name=control_5000 run_type=normal molecule=hexane prediction_window_size=300 max_surrogate_training_size=300
+# snakemake --cores 10 --config run_name=baseline_5000 run_type=baseline molecule=ethanol
+# snakemake --cores 10 --config run_name=baseline_5000 run_type=baseline molecule=butane
+# snakemake --cores 10 --config run_name=baseline_5000 run_type=baseline molecule=hexane
+# snakemake --cores 10 --config run_name=control_5000 run_type=normal molecule=ethanol prediction_window_size=300 max_surrogate_training_size=300
+# snakemake --cores 10 --config run_name=control_5000 run_type=normal molecule=butane prediction_window_size=300 max_surrogate_training_size=300
+# snakemake --cores 10 --config run_name=control_5000 run_type=normal molecule=hexane prediction_window_size=300 max_surrogate_training_size=300
+
+python example_simulations/single_molecule_modeling_example/single_molecule_monte_carlo.py 

@@ -10,6 +10,7 @@ class DeepEnsembleSurrogate:
         self.data_pipeline = data_pipeline
         self.ensemble_size = ensemble_size
         self.max_data = max_data
+        self.fitted_ = False
     
     def fit(self, X, y):
         y = np.asarray(y)
@@ -26,6 +27,8 @@ class DeepEnsembleSurrogate:
             X_boot, y_boot = resample(X, y, n_samples = n_samples, replace=True)
             member.fit(X_boot, y_boot)
 
+        self.fitted_ = True
+        
         return self
     
     def predict(self, X, return_predictive_error=False):

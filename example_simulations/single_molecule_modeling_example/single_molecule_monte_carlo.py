@@ -123,7 +123,7 @@ def get_pubchem_molecule(name, max_retries=100):
                 time.sleep(10) # Wait before retrying
 
 
-def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_name, trial_num, adaptive_threshold, rotation_prob, control_params = {}, surrogate_params = {}, verbose = False):
+def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_name, trial_num, rotation_prob, control_params = {}, surrogate_params = {}, verbose = False):
 
     # Initialize results
     r_g = []
@@ -183,10 +183,10 @@ def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_n
         new_energies.append(new_energy)
         accept_probs.append(prob)
 
-        if adaptive_threshold is True:
-            if len(r_g) > 2:
-                max_rog_change = np.max(np.abs(np.diff(r_g)))
-                target_model.get_potential_energy.update_threshold(kT, acceptable_error, max_rog_change)
+        # if adaptive_threshold is True:
+        #     if len(r_g) > 2:
+        #         max_rog_change = np.max(np.abs(np.diff(r_g)))
+        #         target_model.get_potential_energy.update_threshold(kT, acceptable_error, max_rog_change)
 
 
         if verbose:
@@ -287,8 +287,8 @@ if __name__ == "__main__":
                             default=0, type=int)
     arg_parser.add_argument('--max-surrogate-training-size', '-u', help='Maximum amount of training data for surrogate to use',
                             default=None, type=int)
-    arg_parser.add_argument('--adaptive-threshold', '-s', action='store_true', help='Decides whether to adaptively set surrogate error threshold or not',
-                            default=False)
+    arg_parser.add_argument('--threshold-type', '-s', help='Decides what type of threshold system to use',
+                            default="error_pred_fixed_threshold", type=str)
     arg_parser.add_argument('--fidelity', '-f', help='Controls the accuracy/cost of the quantum chemistry code',
                             default='low', choices=['low', 'medium', 'high'], type=str)                      
 
@@ -298,6 +298,7 @@ if __name__ == "__main__":
     # Create DFT target model
     calc = Psi4(memory="500MB", PSI_SCRATCH="{script_dir}/output/tmp/", **_fidelity[args.fidelity])
 
-    run_mc(args.molecule, args.nsteps, args.temp, args.acceptable_error, calc, args.run_name, args.trial, args.adaptive_threshold, rotation_prob=rgs.rotation_prob,
-           control_params = {'retrain_interval': args.retrain_interval, 'prediction_window_size': args.prediction_window_size, 'epsilon': args.epsilon}, 
+    run_mc(args.molecule, args.nsteps, args.temp, args.acceptable_error, calc, args.run_name, args.trial, rotation_prob=args.rotation_prob,
+           control_params = {'threshold_type': args.threshold_type, 'retrain_interval': args.retrain_interval, 
+                             'prediction_window_size': args.prediction_window_size, 'epsilon': args.epsilon}, 
            surrogate_params = {'max_data': args.max_surrogate_training_size}, verbose = False)

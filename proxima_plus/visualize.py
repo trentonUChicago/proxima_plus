@@ -66,14 +66,21 @@ def get_rog_data_from_dir(directory_path, outlier_threshold=None):
         except:
             try:
                 # Read json results file
-                rog_json_filename = directory_path + "/" + file_name + "/result.json"
+                result_json_filename = directory_path + "/" + file_name + "/result.json"
                 stats_json_filename = directory_path + "/" + file_name + "/lfa_stats.json"
-                with open(rog_json_filename, 'r') as f:
+                rog_json_filename = directory_path + "/" + file_name + "/r_g.json"
+                with open(result_json_filename, 'r') as f:
                     data = json.load(f)
                 with open(stats_json_filename, 'r') as f:
                     stats_data = json.load(f)
+                with open(rog_json_filename, 'r') as f:
+                    rog_history_data = json.load(f)
                 
-                rog = data["r_g"]["statistic"]
+                # rog = data["r_g"]["statistic"]
+                print("rog_data length:", len(rog_history_data))
+                print("rog_data first 10:", rog_history_data[0:10])
+                print("rog_data last 10:", rog_history_data[-10:])
+                rog = np.mean(rog_history_data[-10:])
                 run_time = stats_data["lfa_time"] + stats_data["uq_time"] + stats_data["train_time"] + stats_data["target_time"]
                 num_target_run = stats_data["target_runs"]
             except:
@@ -172,13 +179,14 @@ def plot_bar_plot(directory, run_names, data_type='num_target_run'):
     
     create_bar_plot(run_data, data_type)
 
-directory = {"mine": "/home/trentonjw/Documents/Project/proxima_plus/example_simulations/single_molecule_modeling_example/output/runs",
-             "proxima": "/home/trentonjw/Documents/Project/temp_proxima/proxima_cc/examples/molecule-sampling/runs",
-             "proxima_runs": "/home/trentonjw/Documents/Project/temp_proxima/proxima_runs"}
-molecule = "butane"
-y_lim = {"methane": (.272, .28), "ethanol": (1.125,1.150), "butane": (1.485,1.51)}
-# run_names = [("mine", f"baseline_{molecule}"), ("mine", f"control_{molecule}"), ("mine", f"epsilon_{molecule}"), ("mine", f"epsilon_10_{molecule}"),
-#              ("proxima", "methane_mol1")]
-run_names = [("proxima_runs", "no_rotation_molbutane"), ("proxima_runs", "baseline_molbutane")]
+# directory = {"mine": "/home/trentonjw/Documents/Project/proxima_plus/example_simulations/single_molecule_modeling_example/output/runs",
+#              "proxima": "/home/trentonjw/Documents/Project/temp_proxima/proxima_cc/examples/molecule-sampling/runs",
+#              "proxima_runs": "/home/trentonjw/Documents/Project/proxima_stuff/proxima_runs"}
+# molecule = "methane"
+# y_lim = {"methane": (.272, .28), "ethanol": (1.125,1.150), "butane": (1.485,1.51)}
+# # run_names = [("mine", f"baseline_{molecule}"), ("mine", f"control_{molecule}"), ("mine", f"epsilon_{molecule}"), ("mine", f"epsilon_10_{molecule}"),
+# #              ("proxima", "methane_mol1")]
+# # run_names = [("proxima_runs", "no_rotation_molbutane"), ("proxima_runs", "baseline_molbutane"), ("proxima_runs", "proxima_molbutane")]
+# run_names = [("proxima_runs", "baseline_molmethane"), ("proxima_runs", "proxima_molmethane")]
 
-plot_rog(directory, run_names, y_lim = y_lim[molecule])
+# plot_rog(directory, run_names, y_lim = y_lim[molecule])
