@@ -1,0 +1,49 @@
+run_name: new_changes
+molecules: [methane, ethanol, butane, hexane]
+temps: [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+n_trials: 10
+
+threshold_types:
+  - epistemic
+
+# Per-molecule step counts
+default_nsteps: 5000
+nsteps:
+  methane: 1000
+  ethanol: 1000
+  butane: 1000
+  hexane: 1000
+
+# Per-molecule rotation probabilities
+default_rotation_prob: 0.3
+rotation_prob:
+  methane: 0.0      # no torsions
+  ethanol: 0.3
+  butane: 0.4
+  hexane: 0.4
+
+# Per-molecule Per-threshold acceptable error (energy units)
+acceptable_error:
+  methane:
+    baseline: 0.0
+    default: 0.002
+  ethanol:
+    baseline: 0.0
+    default: 0.002          # used for all thresholds for ethanol
+  butane:
+    baseline: 0.0
+    default: 0.002           # other threshold types if you add them
+  hexane:
+    baseline: 0.0
+    default: 0.002
+  default:
+    baseline: 0.0
+    default: 0.002
+
+
+epsilon: 0.1
+prediction_window_size: 100
+max_surrogate_training_size: 300
+retrain_interval: null          # let controller auto-retrain
+adaptive_acceptable_error: false
+fidelity: medium

@@ -68,7 +68,7 @@ def init_atoms_and_dihedrals(molecule_name):
         dihedrals = []
 
     return atoms, dihedrals
-def propose_move(atoms, dihedrals, rng, perturb_stdev, rotation_prob=0.5, torsion_step=30.0):
+def propose_move(atoms, dihedrals, rng, perturb_stdev, rotation_prob=0.5, torsion_step=15.0):
     """
     Propose a new configuration:
       - With probability rotation_prob: random dihedral rotation
@@ -105,6 +105,27 @@ def propose_move(atoms, dihedrals, rng, perturb_stdev, rotation_prob=0.5, torsio
 ## For bond rotations
 
 
+# For adaptive acceptable error
+def tau_int_initial_positive_sequence(x, max_lag=256):
+    """Simple IPS estimator of integrated autocorrelation time for a 1D series."""
+    x = np.asarray(x, float)
+    n = len(x)
+    if n < 4:
+        return 1.0
+    x = x - x.mean()
+    denom = np.dot(x, x)
+    if denom <= 0:
+        return 1.0
+    # normalized autocovariances up to max_lag
+    ac = np.correlate(x, x, mode='full')[n-1:n+min(max_lag, n-1)] / denom
+    s = 1.0
+    for k in range(1, len(ac)):
+        if ac[k] <= 0:
+            break
+        s += 2.0 * ac[k]
+    return max(1.0, s)
+
+
 
 
 def get_pubchem_molecule(name, max_retries=100):
@@ -123,7 +144,13 @@ def get_pubchem_molecule(name, max_retries=100):
                 time.sleep(10) # Wait before retrying
 
 
-def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_name, trial_num, rotation_prob, control_params = {}, surrogate_params = {}, verbose = False):
+def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_name, trial_num, rotation_prob, fidelity,
+           control_params = {}, surrogate_params = {}, verbose = False):
+
+    # For adaptive acceptable error
+    W = 50 # window size for ROG stats
+    rog_deltas_accept = []
+    acceptable_error_list = []
 
     # Initialize results
     r_g = []
@@ -132,6 +159,7 @@ def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_n
     accept_probs = []
     config_accepts = []
     surrogate_accepts = []
+    
 
     # Start timer
     start_time = time.time()
@@ -148,15 +176,13 @@ def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_n
     surrogate = DeepEnsembleSurrogate(BayesianRidge, data_pipeline, **surrogate_params)
 
     # Get initial energy
-    energy = calc.get_potential_energy(atoms)
+    energy = target_model.get_potential_energy(atoms)
 
     # Create Control model
     target_model.get_potential_energy = ControlWrapper(target_model.get_potential_energy, surrogate, acceptable_error, **control_params)
 
 
     for step in range(num_steps):
-        # new_atoms = atoms.copy()
-        # new_atoms.rattle(stdev=PERTURB, rng=rng)
         new_atoms = propose_move(atoms, dihedrals, rng, perturb_stdev=PERTURB)
         
 
@@ -179,14 +205,40 @@ def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_n
         energies.append(energy)
         config_accepts.append(accept)
         surrogate_accepts.append(is_surrogate)
-
         new_energies.append(new_energy)
         accept_probs.append(prob)
+        if target_model.get_potential_energy.adaptive_acceptable_error:
+            acceptable_error_list.append(target_model.get_potential_energy.acceptable_error)
 
-        # if adaptive_threshold is True:
-        #     if len(r_g) > 2:
-        #         max_rog_change = np.max(np.abs(np.diff(r_g)))
-        #         target_model.get_potential_energy.update_threshold(kT, acceptable_error, max_rog_change)
+
+
+
+
+        # Track |ΔROG| only for accepted moves
+        if accept and len(r_g) >= 2:
+            rog_deltas_accept.append(abs(r_g[-1] - r_g[-2]))
+            if len(rog_deltas_accept) > W:
+                rog_deltas_accept = rog_deltas_accept[-W:]
+
+        # Optionally adapt acceptable_error from final ROG bound
+        if target_model.get_potential_energy.adaptive_acceptable_error:
+            if len(rog_deltas_accept) >= 5 and len(r_g) >= 10 and len(accept_probs) >= 10:
+                # robust Δg: 95% quantile of recent |ΔROG|
+                delta_g_q = np.quantile(rog_deltas_accept, 0.5)
+                # τ_int from a trailing window of ROG
+                tau_hat   = tau_int_initial_positive_sequence(r_g[-min(len(r_g), 4*W):])
+                # mean acceptance over recent window
+                p_avg     = float(np.mean(accept_probs[-min(len(accept_probs), W):]))
+                # Treat 'acceptable_error' argument as desired final ROG bound B
+                target_model.get_potential_energy.update_acceptable_error(
+                    kT,
+                    final_error_bound=acceptable_error,
+                    delta_g_q=delta_g_q,
+                    tau_int=tau_hat,
+                    p_avg=p_avg,
+                    safety=1,
+                    max_eps_ratio=0.7,
+                )
 
 
         if verbose:
@@ -207,37 +259,69 @@ def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_n
     else:
         stats = bayes_mvs(r_g_last_half)[0]._asdict()
 
-    json_results = {"r_g_stats": stats,
-                'acceptable_error': acceptable_error,
-                'temp': temp,
-                'time': elapsed_time
-                }
-    
-    csv_results = pd.DataFrame({'Energy': energies,
-                                'New Energy': new_energies,
-                                'ROG': r_g, 
-                                'Acceptance Threshold': accept_probs,
-                                'config_accepts': config_accepts,
-                                'surrogate_accepts': surrogate_accepts,
-                                'surrogate_energy': target_model.get_potential_energy.results["y_prediction"],
-                                'target_energy': target_model.get_potential_energy.results["y_target"], 
-                                'epistemic_uncertainty': target_model.get_potential_energy.results["epistemic_uncertainty"], 
-                                'aleatory_uncertainty': target_model.get_potential_energy.results["aleatory_uncertainty"], 
-                                'error_uncertainty_correlation': target_model.get_potential_energy.results["coefficient_of_determination"],
-                                'surrogate_error_prediction': target_model.get_potential_energy.results["surrogate_error_prediction"],
-                                'acceptable_surrogate_error': target_model.get_potential_energy.results["acceptable_surrogate_error"]
-                               })
+    json_results = {"run_info": {"molecule": molecule_name, "temp": temp, "target_model_fidelity": fidelity},
+                    "r_g_stats": stats,
+                    'acceptable_error': acceptable_error,
+                    'time': elapsed_time
+                   }
 
+    csv_dict = {'Energy': energies,
+                'New Energy': new_energies,
+                'ROG': r_g, 
+                'Acceptance Threshold': accept_probs,
+                'config_accepts': config_accepts,
+                'surrogate_accepts': surrogate_accepts,
+               }
+
+    ctrl = target_model.get_potential_energy
+            
+    for key, values in ctrl.results.items():
+        if len(values) != 0:
+            csv_dict[key] = values
+
+    if ctrl.adaptive_acceptable_error:
+            csv_dict["acceptable_error"] = acceptable_error_list
+
+    csv_results = pd.DataFrame(csv_dict)
 
     # Save extra JSON results
     json_results['surrogate_info'] = {'ensemble_size': surrogate.ensemble_size, 'max_training_size': surrogate.max_data}
-    json_results['control_model_info'] = {'initial_surrogate_data': target_model.get_potential_energy.initial_surrogate_data, 
-                                          'initial_error_data': target_model.get_potential_energy.initial_error_data,
-                                          'retrain_interval': target_model.get_potential_energy.retrain_interval,
-                                          'error_prediction_type': target_model.get_potential_energy.error_prediction_type,
-                                          'sliding_window_size': target_model.get_potential_energy.sliding_window_size
+    json_results['control_model_info'] = {'initial_surrogate_data': ctrl.initial_surrogate_data, 
+                                          'initial_error_data': ctrl.initial_error_data,
+                                          'retrain_interval': ctrl.retrain_interval,
+                                          'error_prediction_type': ctrl.error_prediction_type,
+                                          'sliding_window_size': ctrl.sliding_window_size,
+                                          'adaptive_acceptable_error': ctrl.adaptive_acceptable_error
                                          }
-    json_results['retraining_times'] = target_model.get_potential_energy.retraining_times
+    json_results['control_model_info'].update({
+        'threshold_type': ctrl.threshold_type,
+        'threshold_window': ctrl.threshold_window,
+        'epsilon': ctrl.epsilon,
+        'prediction_window_size': ctrl.prediction_window_size,
+    })
+    json_results['retraining_times'] = ctrl.retraining_times
+    surrogate_used = np.sum(surrogate_accepts)
+
+    # Make sure that there are no nans
+    errs = np.array(ctrl.results["surrogate_error"], dtype=np.float64)
+    finite_mask = np.isfinite(errs)
+    if finite_mask.any():
+        mean_err = float(errs[finite_mask].mean())
+        median_err = float(np.median(errs[finite_mask]))
+    else:
+        mean_err = None
+        median_err = None
+    json_results['summary'] = {
+        'num_steps': num_steps,
+        'num_surrogate_steps': int(surrogate_used),
+        'surrogate_fraction': float(surrogate_used) / num_steps,
+        'mean_surrogate_error': mean_err,
+        'median_surrogate_error': median_err,
+        'acceptance_rate': float(np.mean(config_accepts)),
+    }
+
+    if ctrl.adaptive_acceptable_error:
+        json_results['summary']['final_acceptable_error'] = ctrl.acceptable_error
 
 
     # Create Directory
@@ -255,9 +339,9 @@ def run_mc(molecule_name, num_steps, temp, acceptable_error, target_model, run_n
 
     
     # Get errors
-    surrogate_error = np.array(target_model.get_potential_energy.error_prediction_vals['surrogate_error'])
-    epistemic_uncertainty = np.array(target_model.get_potential_energy.error_prediction_vals['epistemic_uncertainty'])
-    aleatory_uncertainty = np.array(target_model.get_potential_energy.error_prediction_vals['aleatory_uncertainty'])
+    surrogate_error = np.array(ctrl.error_prediction_vals['surrogate_error'])
+    epistemic_uncertainty = np.array(ctrl.error_prediction_vals['epistemic_uncertainty'])
+    aleatory_uncertainty = np.array(ctrl.error_prediction_vals['aleatory_uncertainty'])
     # Create and save error plots
     if epistemic_uncertainty.size != 0:
         create_error_plot(np.log10(epistemic_uncertainty), surrogate_error, f"{directory_path}epistemic_error_plot")
@@ -275,7 +359,7 @@ if __name__ == "__main__":
                             default="methane", type=str)
     arg_parser.add_argument('--temp', '-T', help='Temperature at which to sample (K).'
                                                  'Default is 298 (room temperature)', default=298, type=float)
-    arg_parser.add_argument('--nsteps', '-t', help='Number of Monte Carlo steps', default=5000, type=int)
+    arg_parser.add_argument('--nsteps', '-t', help='Number of Monte Carlo steps', default=1000, type=int)
     arg_parser.add_argument('--acceptable-error', '-a', help='Threshold for Acceptable Surrogate Error or Final Error if using adaptive threshold',
                             default=0.002, type=float)
     arg_parser.add_argument('--epsilon', '-e', help='Chance for the control model to run the target model anyways',
@@ -289,6 +373,7 @@ if __name__ == "__main__":
                             default=None, type=int)
     arg_parser.add_argument('--threshold-type', '-s', help='Decides what type of threshold system to use',
                             default="error_pred_fixed_threshold", type=str)
+    arg_parser.add_argument('--adaptive-acceptable-error', '-A', help="If set, treat acceptable_error as final ROG bias bound and adapt surrogate error bound online.", action='store_true')
     arg_parser.add_argument('--fidelity', '-f', help='Controls the accuracy/cost of the quantum chemistry code',
                             default='low', choices=['low', 'medium', 'high'], type=str)                      
 
@@ -296,9 +381,10 @@ if __name__ == "__main__":
     args = arg_parser.parse_args()
 
     # Create DFT target model
-    calc = Psi4(memory="500MB", PSI_SCRATCH="{script_dir}/output/tmp/", **_fidelity[args.fidelity])
+    calc = Psi4(memory="500MB", PSI_SCRATCH=f"{script_dir}/output/tmp/", **_fidelity[args.fidelity])
 
-    run_mc(args.molecule, args.nsteps, args.temp, args.acceptable_error, calc, args.run_name, args.trial, rotation_prob=args.rotation_prob,
+    run_mc(args.molecule, args.nsteps, args.temp, args.acceptable_error, calc, args.run_name, args.trial, rotation_prob=args.rotation_prob, fidelity=args.fidelity,
            control_params = {'threshold_type': args.threshold_type, 'retrain_interval': args.retrain_interval, 
-                             'prediction_window_size': args.prediction_window_size, 'epsilon': args.epsilon}, 
+                             'prediction_window_size': args.prediction_window_size, 'epsilon': args.epsilon, 
+                             'adaptive_acceptable_error': args.adaptive_acceptable_error}, 
            surrogate_params = {'max_data': args.max_surrogate_training_size}, verbose = False)

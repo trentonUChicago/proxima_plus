@@ -14,8 +14,13 @@ class DeepEnsembleSurrogate:
     
     def fit(self, X, y):
         y = np.asarray(y)
+
+        if self.max_data is not None and len(X) > self.max_data:
+            X = X[-self.max_data:]
+            y = y[-self.max_data:]
         # Transform data
         X = self.data_pipeline.fit_transform(X)
+
         # Fit each member of ensemble
         for member in self.members:
             if self.max_data:
@@ -28,7 +33,7 @@ class DeepEnsembleSurrogate:
             member.fit(X_boot, y_boot)
 
         self.fitted_ = True
-        
+
         return self
     
     def predict(self, X, return_predictive_error=False):

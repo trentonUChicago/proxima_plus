@@ -1,29 +1,47 @@
 import numpy as np
 import time
 from sklearn.linear_model import LinearRegression
-from sklearn.neighbors import NearestNeighbors
 from scipy import stats
 
-def get_distance(model, training_data, x, k=1, n_jobs=None, metric='mahalanobis'):
+
+
+# For getting distance
+from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import RobustScaler
+from matminer.featurizers.structure import CoulombMatrix
+from pymatgen.io.ase import AseAtomsAdaptor
+from sklearn.pipeline import Pipeline
+
+cm = CoulombMatrix(flatten=True)
+cm.set_n_jobs(1)
+cm = Pipeline([('featurizer', cm),('scaler', RobustScaler())])
+
+
+def get_distance(training_data, x, k=1, n_jobs=None, metric='minkowski'):
     # Get distance
-    if len(training_data) == 0 or not(model.fitted_):
+    if len(training_data) < 10:
         return 0
 
-    training_data = model.data_pipeline.transform(training_data)
-    x = model.data_pipeline.transform([x])
+    train_X = [AseAtomsAdaptor.get_molecule(x) for x in training_data]
+    train_X = cm.fit_transform(train_X)
 
-    nn = NearestNeighbors(n_neighbors=k, n_jobs=n_jobs, metric=metric).fit(training_data)
-    dists, _ = nn.kneighbors(x)
-    return np.min(dists, axis=1)
+    nn = NearestNeighbors(n_neighbors=k, n_jobs=n_jobs, metric=metric).fit(train_X)
+
+    # Get the distance
+    strc = AseAtomsAdaptor.get_molecule(x)
+    features = cm.transform([strc])
+    dists, _ = nn.kneighbors(features)
+
+    return float(np.min(dists, axis=1))
 
 
 class ControlWrapper:
     """Control Model that manages when to use target or surrogate model"""
 
     def __init__(self, target_function, surrogate, acceptable_error, initial_surrogate_data = 20, 
-                 initial_error_data = 20, retrain_interval=None, error_prediction_type=None, 
+                 initial_error_data = 40, retrain_interval=None, error_prediction_type=None, 
                  sliding_window_size = 10, prediction_window_size = 0, epsilon = 0.1,
-                 threshold_type = "error_pred_fixed_threshold"):
+                 threshold_type = "error_pred_fixed_threshold", adaptive_acceptable_error=False):
         """
         target_function is the actual target model
         surrogate is assumed to be an ensemble model
@@ -36,6 +54,7 @@ class ControlWrapper:
         # Set Controller Variables
         self.threshold_window = 100
         self.acceptable_error = acceptable_error # Set error threshold for surrogate error
+        self.adaptive_acceptable_error = adaptive_acceptable_error
         self.disable_surrogate = acceptable_error == 0 
         self.surrogate_initialized = False
         self.initial_surrogate_data = initial_surrogate_data
@@ -43,8 +62,15 @@ class ControlWrapper:
         self.retrain_interval = retrain_interval
         self.epsilon = epsilon # Chance of running target model anyways
         self.threshold_type = threshold_type
-        if self.threshold_type == "proxima":
+        self.threshold_min = np.inf
+        self.threshold_max = -np.inf
+        if self.threshold_type in ["proxima", "epistemic", "epistemic_aleatory"]:
             self.threshold = None
+        # For Threshold-MAE based control
+        self.alpha = 1.0
+        self.threshold_history = []
+        self.uncertainty_history = []
+        self.mu_history = []  # Stores surrogate errors
 
         
         # History
@@ -55,8 +81,9 @@ class ControlWrapper:
             self.results["coefficient_of_determination"] = []
             self.results["acceptable_surrogate_error"] = []
             self.results["surrogate_error_prediction"] = []
-        elif self.threshold_type == "proxima":
+        if self.threshold_type == "proxima":
             self.results["distance"] = []
+        if self.threshold_type in ["proxima", "epistemic", "epistemic_aleatory"]:
             self.results["threshold"] = []
         self.retraining_times = []
         self.last_retrain_data_size = 0
@@ -86,14 +113,24 @@ class ControlWrapper:
                 # Get a predicted surrogate error
                 uncertainty = self.get_error_prediction(epistemic_uncertainty, aleatory_uncertainty)
                 # Check error prediction with threshold
+                # print("accept:", uncertainty < self.acceptable_error, "uncertainty:", uncertainty, "acceptable_error:", self.acceptable_error)
                 use_surrogate = uncertainty < self.acceptable_error
             elif self.threshold_type == "proxima":
                 # Get minimum distance
-                uncertainty = get_distance(self.surrogate, self.get_surrogate_training_data()[0], x)
+                uncertainty = get_distance(self.get_surrogate_training_data()[0], x)
                 # Check if minimum distance is 
                 use_surrogate = self.threshold is not None and uncertainty < self.threshold
-
-
+            elif self.threshold_type == "epistemic":
+                uncertainty = np.log10(epistemic_uncertainty) if epistemic_uncertainty > 0 else 0
+                # Check if minimum distance is 
+                use_surrogate = self.threshold is not None and uncertainty < self.threshold
+            elif self.threshold_type == "epistemic_aleatory":
+                uncertainty = np.log10(epistemic_uncertainty + aleatory_uncertainty) if (epistemic_uncertainty + aleatory_uncertainty) > 0 else 0
+                # Check if minimum distance is 
+                use_surrogate = self.threshold is not None and uncertainty < self.threshold
+            else:
+                uncertainty = None
+                use_surrogate = False
         else:
             uncertainty = None
             use_surrogate = False
@@ -140,7 +177,6 @@ class ControlWrapper:
         start_time = time.time()
         # Get X and y for training from previous target model results
         X, y_target = self.get_surrogate_training_data()
-        print("In retrain_surrogate, X type:", type(X))
         self.surrogate.fit(X, y_target)
         end_time = time.time()
         # Save surrogate retraining time
@@ -182,12 +218,20 @@ class ControlWrapper:
             # Pair uncertainties together
             uncertainties = np.array([list(pair) for pair in zip(epistemic_errors, aleatory_errors)])
 
+            # Avoid 0s
+            uncertainties = np.clip(uncertainties, 1e-12, None)
+
             # Fit model
             self.error_model.fit(np.log10(uncertainties), surrogate_errors)
 
             # Save coefficient of determination
             self.r_squared = self.error_model.score(np.log10(uncertainties), surrogate_errors)
+        
+        # Prevent 0s
+        epistemic_uncertainty = np.clip(epistemic_uncertainty, 1e-12, None)
+        aleatory_uncertainty = np.clip(aleatory_uncertainty, 1e-12, None)
 
+        # Get Prediction
         surrogate_error_pred = self.error_model.predict([np.log10([epistemic_uncertainty, aleatory_uncertainty])])[0]
 
         return surrogate_error_pred
@@ -204,8 +248,9 @@ class ControlWrapper:
             self.results["coefficient_of_determination"].append(self.r_squared)
             self.results["acceptable_surrogate_error"].append(self.acceptable_error)
             self.results["surrogate_error_prediction"].append(uncertainty)
-        elif self.threshold_type == "proxima":
+        if self.threshold_type == "proxima":
             self.results["distance"].append(uncertainty)
+        if self.threshold_type in ["proxima", "epistemic", "epistemic_aleatory"]:
             self.results["threshold"].append(self.threshold)
 
         # If we can find surrogate error, use to update sliding window for error prediction
@@ -214,6 +259,18 @@ class ControlWrapper:
             self.update_error_sliding_window(absolute_error, epistemic, aleatory, uncertainty)
         else:
             self.results["surrogate_error"].append(None)
+
+        # Set Threshold Max and Min
+        if uncertainty is not None:
+            self.uncertainty_history.append(uncertainty)
+
+            self.threshold_max = np.max(self.uncertainty_history[-100:])
+            self.threshold_min = np.min(self.uncertainty_history[-100:])
+
+            # if self.threshold_max < uncertainty:
+            #     self.threshold_max = uncertainty
+            # if self.threshold_min > uncertainty:
+            #     self.threshold_min = uncertainty
 
     def update_error_sliding_window(self, surrogate_error, epistemic, aleatory, distance=None):
         self.results["surrogate_error"].append(surrogate_error)
@@ -237,7 +294,7 @@ class ControlWrapper:
             self.error_prediction_vals["epistemic_uncertainty"].append(np.mean(self.error_sliding_window["epistemic_uncertainty"]))
             self.error_prediction_vals["aleatory_uncertainty"].append(np.mean(self.error_sliding_window["aleatory_uncertainty"]))
             if self.threshold_type == "proxima":
-                self.error_prediction_vals["distance"].append(np.mean(self.error_sliding_window["distances"]))
+                self.error_prediction_vals["distance"].append(np.mean(self.error_sliding_window["distance"]))
 
             # Check error prediction type
             if self.error_prediction_type == "max":
@@ -247,34 +304,192 @@ class ControlWrapper:
             else:
                 self.error_prediction_vals["surrogate_error"].append(np.mean(self.error_sliding_window["surrogate_error"]))
         
-    # def update_threshold(self, kT, final_error_bound, max_final_value_change):
-    #     if max_final_value_change > 0:
-    #         self.acceptable_error = kT * np.log(1 + final_error_bound/max_final_value_change)
+        # Adapt Threshold
+        if self.threshold_type in ["proxima", "epistemic", "epistemic_aleatory"]:
+            self.update_threshold()
+
+    # def update_threshold(self):
+    #     # Get surrogate_errors
+    #     surrogate_err = []
+    #     for i in range(len(self.results['surrogate_error'])):
+    #         if self.results["surrogate_error"][i] is not None:
+    #             surrogate_err.append(self.results["surrogate_error"][i])
+
+    #     # If there are not enough surrogate errors available, return
+    #     if len(surrogate_err) < self.initial_error_data:
+    #         return
+
+    #     # Set new alpha
+    #     self.update_alpha()
+        
+    #     current_err = np.mean(surrogate_err[-self.threshold_window:])
+
+    #     if self.threshold == None:
+    #         # Following Eq. 1 of https://dl.acm.org/doi/abs/10.1145/3447818.3460370
+    #         self.threshold = current_err / self.alpha
+    #         self.threshold /= 2
+    #     else:
+    #         # Update according to Eq. 3 of https://dl.acm.org/doi/abs/10.1145/3447818.3460370
+    #         self.threshold -= (current_err - self.acceptable_error) / self.alpha
+    #         if self.threshold_type == "proxima":
+    #             self.threshold = max(self.threshold, 0)  # Keep it at least zero
+
 
     def update_threshold(self):
-        # Get surrogate_errors
-        surrogate_err = []
-        for i in range(len(self.results['surrogate_error'])):
-            if self.results["surrogate_error"][i] is not None:
-                surrogate_err.append(self.results["surrogate_error"][i])
-
-        # If no surrogate errors are available, return
-        if len(surrogate_err) == 0:
+        """
+        Proxima-style integral controller using mean surrogate error μ_k
+        and threshold T_k, with alpha estimated from (T, μ) pairs.
+        """
+        # Only meaningful for threshold-based modes
+        if self.threshold_type not in ["proxima", "epistemic", "epistemic_aleatory"]:
             return
 
-        self.update_alpha()
-        
-        current_err = np.mean(surrogate_err[-self.threshold_window:])
+        # Gather all surrogate errors we have (target & surrogate both run)
+        surrogate_err = [e for e in self.results["surrogate_error"] if e is not None]
 
-        if self.threshold == None:
-            # Following Eq. 1 of https://dl.acm.org/doi/abs/10.1145/3447818.3460370
-            self.threshold = current_err / self.alpha
-        else:
-            # Update according to Eq. 3 of https://dl.acm.org/doi/abs/10.1145/3447818.3460370
-            self.threshold -= (current_err - self.acceptable_error) / self.alpha
-            self.threshold = max(self.threshold, 0)  # Keep it at least zero
+        # Not enough data yet
+        if len(surrogate_err) < self.initial_error_data:
+            return
+
+        # Current mean error μ_k over the last window
+        current_err = float(np.mean(surrogate_err[-self.threshold_window:]))
+
+        # Initialize threshold once, based on observed uncertainties
+        if self.threshold is None:
+            init_thr = self._initial_threshold_guess()
+            if init_thr is None:
+                # still no uncertainty data to base it on
+                return
+            self.threshold = init_thr
+            # record first pair (T_0, μ_0) but don't update yet
+            self.threshold_history.append(self.threshold)
+            self.mu_history.append(current_err)
+            return
+
+        # Record current (T_k, μ_k)
+        self.threshold_history.append(self.threshold)
+        self.mu_history.append(current_err)
+
+        # Update alpha from history
+        self.update_alpha()
+
+        # Integral update from Proxima: T_{k+1} = T_k - (μ_k - μ_target)/alpha
+        self.threshold -= (current_err - self.acceptable_error) / self.alpha
+
+        # # For distance threshold keep it non-negative
+        # if self.threshold_type == "proxima":
+        #     self.threshold = max(self.threshold, 0.0)
+
+
+        self.threshold = np.clip(self.threshold, self.threshold_min, self.threshold_max)
+
+
+
+
+
+    # def update_alpha(self):
+    #     if self.threshold_type == "proxima":
+    #         uncertainty_series = np.array(self.error_prediction_vals["distance"])
+    #     elif self.threshold_type == "epistemic":
+    #         uncertainty_series = np.array(self.error_prediction_vals["epistemic_uncertainty"])
+    #     elif self.threshold_type == "epistemic_aleatory":
+    #         uncertainty_series = np.array(self.error_prediction_vals["epistemic_uncertainty"]) + np.array(self.error_prediction_vals["aleatory_uncertainty"])
+    #     else:
+    #         self.alpha = 1.0
+    #         return
+
+    #     if len(uncertainty_series) < 2 or len(self.error_prediction_vals["surrogate_error"]) < 2:
+    #         self.alpha = 1.0
+    #         return
+
+    #     u = np.array(uncertainty_series[-self.threshold_window:])
+    #     e = np.array(self.error_prediction_vals["surrogate_error"][-self.threshold_window:])
+
+    #     # If using epistemic/aleatory values, log
+    #     if self.threshold_type in ["epistemic", "epistemic_aleatory"]:
+    #         # Prevent 0s
+    #         u = np.clip(u, 1e-12, None)
+    #         u = np.log10(u)
+
+    #     self.alpha = stats.linregress(u, e).slope
+    #     self.alpha = max(self.alpha, 1e-6)
 
     def update_alpha(self):
-        self.alpha = stats.linregress(self.error_prediction_vals["distance"][-self.threshold_window:], 
-                                      self.error_prediction_vals["surrogate_error"][-self.threshold_window:]).slope
-        self.alpha = max(self.alpha, 1e-6)
+        """
+        Estimate alpha from stored (threshold, mu) pairs via
+        a zero-intercept least-squares fit: mu ≈ alpha * threshold.
+        """
+        T = np.array(self.threshold_history, dtype=float)
+        mu = np.array(self.mu_history, dtype=float)
+
+        mask = np.isfinite(T) & np.isfinite(mu) & (T > 0)
+        T = T[mask]
+        mu = mu[mask]
+
+        # Need at least two distinct thresholds
+        if T.size < 2 or np.allclose(T, T[0]):
+            self.alpha = 1.0
+            return
+
+        # Minimize sum (mu_i - alpha T_i)^2 with intercept fixed at 0
+        denom = float(np.dot(T, T))
+        if denom <= 0:
+            self.alpha = 1.0
+            return
+
+        alpha = float(np.dot(T, mu) / denom)
+        # Keep a reasonable lower bound to avoid huge steps
+        self.alpha = max(alpha, 1e-6)
+
+
+    def _initial_threshold_guess(self):
+        """
+        Pick a sane initial threshold based on recent uncertainty values,
+        mapped into the same space that __call__ uses for comparison.
+        """
+        if self.threshold_type == "proxima":
+            u = np.array(self.error_prediction_vals["distance"])
+        elif self.threshold_type == "epistemic":
+            u = np.array(self.error_prediction_vals["epistemic_uncertainty"])
+            u = np.log10(np.clip(u, 1e-12, None))
+        elif self.threshold_type == "epistemic_aleatory":
+            u = (np.array(self.error_prediction_vals["epistemic_uncertainty"])
+                 + np.array(self.error_prediction_vals["aleatory_uncertainty"]))
+            u = np.log10(np.clip(u, 1e-12, None))
+        else:
+            return None
+
+        if u.size == 0:
+            return None
+
+        return float(np.median(u[-self.threshold_window:]))
+    
+
+
+    def update_acceptable_error(self, kT, final_error_bound,
+                                delta_g_q, tau_int, p_avg,
+                                safety=1, max_eps_ratio=0.2):
+        """
+        Adapt acceptable surrogate *energy* error from a bound on final ROG bias.
+
+        final_error_bound: desired bound B on bias of the time-averaged ROG
+        delta_g_q: high-quantile (e.g., 0.95) of |ROG_{t} - ROG_{t-1}| on accepted moves
+        tau_int: estimate of integrated autocorrelation time of ROG
+        p_avg: mean acceptance probability over a recent window
+        safety: >1 shrinks epsilon for safety margin
+        max_eps_ratio: cap epsilon <= max_eps_ratio * kT
+        """
+        # Stabilizers
+        delta = max(delta_g_q, 1e-12)
+        tau = max(tau_int, 1.0)
+        p   = min(max(p_avg, 1e-3), 1.0)
+
+        # Right-hand side inside the log
+        rhs = (final_error_bound / (delta * p * tau)) / max(safety, 1.0)
+        rhs = max(rhs, 0.0)
+
+        eps = kT * np.log1p(rhs)  # log(1 + x) is stable for small x
+        eps_cap = max_eps_ratio * kT
+
+        self.acceptable_error = float(min(eps, eps_cap)) * 1 # Make the threshold looser
+
