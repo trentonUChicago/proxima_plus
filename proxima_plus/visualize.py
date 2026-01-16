@@ -1039,7 +1039,7 @@ def plot_delta_adaptive_tradeoff(
 if __name__ == "__main__":
     save_path = "/home/trentonjw/Documents/Project/delta_graphs"
 
-    molecule = "methane"
+    molecule = "hexane"
     directory = {"mine": f"/home/trentonjw/Documents/Project/delta_runs/{molecule}_runs",
              "mine_2": f"/home/trentonjw/Documents/Project/delta_runs/low_{molecule}_runs",
              "proxima": "/home/trentonjw/Documents/Project/temp_proxima/proxima_cc/examples/molecule-sampling/runs",
@@ -1062,7 +1062,9 @@ if __name__ == "__main__":
     #         ]
 
 
-    run_names = [("mine", f"mid_finals_baseline_{molecule}", "Baseline"),
+    run_names = [
+            #  ("mine", f"mid_finals_baseline_{molecule}", "Baseline"),
+             ("fin", f"final_baseline_{molecule}", "Baseline"),
              ("new_test_runs_1", f"new_changes_proxima_{molecule}", "Distance Uncertainty"),
              ("new_test_runs_2", f"new_changes_epistemic_{molecule}", "Epistemic Uncertainty"),
             ]

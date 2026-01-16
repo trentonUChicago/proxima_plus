@@ -375,7 +375,8 @@ if __name__ == "__main__":
                             default="error_pred_fixed_threshold", type=str)
     arg_parser.add_argument('--adaptive-acceptable-error', '-A', help="If set, treat acceptable_error as final ROG bias bound and adapt surrogate error bound online.", action='store_true')
     arg_parser.add_argument('--fidelity', '-f', help='Controls the accuracy/cost of the quantum chemistry code',
-                            default='low', choices=['low', 'medium', 'high'], type=str)                      
+                            default='low', choices=['low', 'medium', 'high'], type=str)
+    arg_parser.add_argument('--control-mode', '-C', default='original', choices = ['original', 'original_audit', 'tm', 'tm_audit'], type=str)                      
 
     
     args = arg_parser.parse_args()
@@ -386,5 +387,5 @@ if __name__ == "__main__":
     run_mc(args.molecule, args.nsteps, args.temp, args.acceptable_error, calc, args.run_name, args.trial, rotation_prob=args.rotation_prob, fidelity=args.fidelity,
            control_params = {'threshold_type': args.threshold_type, 'retrain_interval': args.retrain_interval, 
                              'prediction_window_size': args.prediction_window_size, 'epsilon': args.epsilon, 
-                             'adaptive_acceptable_error': args.adaptive_acceptable_error}, 
+                             'adaptive_acceptable_error': args.adaptive_acceptable_error, 'control_mode': args.control_mode}, 
            surrogate_params = {'max_data': args.max_surrogate_training_size}, verbose = False)

@@ -5,6 +5,7 @@ import os
 # ---- Global config ----
 base_run_name = config.get("run_name", "testing")
 molecules = config.get("molecules", ["methane", "ethanol", "butane", "hexane"])
+control_modes = config.get("control_modes", ["original", "original_audit", "tm", "tm_audit"])
 temps     = config.get("temps", [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000])
 n_trials  = int(config.get("n_trials", 20))
 threshold_types = config.get(
@@ -106,9 +107,9 @@ def acceptable_error_for(mol, threshold):
 # String pattern for results (no Python functions here)
 results_pattern = (
     f"example_simulations/single_molecule_modeling_example/output/runs/{base_run_name}" +
-    "_{threshold}_{molecule}/" +
+    "_{threshold}_{control_mode}_{molecule}/" +
     f"{base_run_name}" +
-    "_{threshold}_{molecule}_temp{temp}_trial{trial}/results.json"
+    "_{threshold}_{control_mode}_{molecule}_temp{temp}_trial{trial}/results.json"
 )
 
 # ---- Targets ----
@@ -118,6 +119,7 @@ rule all:
             results_pattern,
             threshold=threshold_types,
             molecule=molecules,
+            control_mode=control_modes,
             temp=temps,
             trial=range(1, n_trials + 1),
         )
@@ -135,7 +137,7 @@ rule run_mc:
         temp=lambda wc: wc.temp,
         trial=lambda wc: wc.trial,
         threshold=lambda wc: wc.threshold,
-        run_name=lambda wc: f"{base_run_name}_{wc.threshold}",
+        run_name=lambda wc: f"{base_run_name}_{wc.threshold}_{wc.control_mode}",
         nsteps=lambda wc: steps_for(wc.molecule),
         rotation_prob=lambda wc: rotation_prob_for(wc.molecule),
         acceptable_error=lambda wc: acceptable_error_for(wc.molecule, wc.threshold),
@@ -157,6 +159,7 @@ rule run_mc:
             if max_surrogate_training_size is not None else ""
         ),
         fidelity=fidelity,
+        control_mode=lambda wc: wc.control_mode,
     threads: 1
     shell:
         r"""
@@ -174,6 +177,7 @@ rule run_mc:
             {params.adaptive_flag} \
             {params.retrain_arg} \
             {params.max_data_arg} \
-            --fidelity {params.fidelity}
+            --fidelity {params.fidelity} \
+            --control-mode {params.control_mode}
         """
 

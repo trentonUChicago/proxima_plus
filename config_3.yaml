@@ -1,9 +1,11 @@
-run_name: new_changes
-molecules: [methane, ethanol, butane, hexane]
+run_name: audit
+molecules: [methane]
+control_modes: ["tm"]
 temps: [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 n_trials: 10
 
 threshold_types:
+  - proxima
   - epistemic
 
 # Per-molecule step counts
@@ -45,5 +47,5 @@ epsilon: 0.1
 prediction_window_size: 100
 max_surrogate_training_size: 300
 retrain_interval: null          # let controller auto-retrain
-adaptive_acceptable_error: true
+adaptive_acceptable_error: false
 fidelity: medium
