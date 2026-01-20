@@ -5,7 +5,7 @@ import os
 # ---- Global config ----
 base_run_name = config.get("run_name", "testing")
 molecules = config.get("molecules", ["methane", "ethanol", "butane", "hexane"])
-control_modes = config.get("control_modes", ["original", "original_audit", "tm", "tm_audit"])
+control_modes = config.get("control_modes", ["original", "originalaudit", "tm", "tmaudit"])
 temps     = config.get("temps", [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000])
 n_trials  = int(config.get("n_trials", 20))
 threshold_types = config.get(

@@ -341,11 +341,11 @@ class ControlWrapper:
     def update_threshold(self):
         if self.control_mode == "original":
             self.update_threshold_original(audit_only = False)
-        elif self.control_mode == "original_audit":
+        elif self.control_mode == "originalaudit":
             self.update_threshold_original(audit_only = True)
         elif self.control_mode == "tm":
             self.update_threshold_tm(audit_only = False)
-        elif self.control_mode == "tm_audit":
+        elif self.control_mode == "tmaudit":
             self.update_threshold_tm(audit_only = True)
 
 

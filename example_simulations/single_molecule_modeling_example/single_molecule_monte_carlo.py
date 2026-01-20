@@ -376,7 +376,7 @@ if __name__ == "__main__":
     arg_parser.add_argument('--adaptive-acceptable-error', '-A', help="If set, treat acceptable_error as final ROG bias bound and adapt surrogate error bound online.", action='store_true')
     arg_parser.add_argument('--fidelity', '-f', help='Controls the accuracy/cost of the quantum chemistry code',
                             default='low', choices=['low', 'medium', 'high'], type=str)
-    arg_parser.add_argument('--control-mode', '-C', default='original', choices = ['original', 'original_audit', 'tm', 'tm_audit'], type=str)                      
+    arg_parser.add_argument('--control-mode', '-C', default='original', choices = ['original', 'originalaudit', 'tm', 'tmaudit'], type=str)                      
 
     
     args = arg_parser.parse_args()

@@ -1,6 +1,6 @@
 run_name: audit
 molecules: [methane]
-control_modes: ["tm_audit"]
+control_modes: ["tmaudit"]
 temps: [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 n_trials: 10
 

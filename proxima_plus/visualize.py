@@ -33,6 +33,10 @@ DEFAULT_COLORS = {
     "Baseline": "#1f77b4",                            # blue
     "Proxima": "#ff7f0e",                             # orange
     "Distance Uncertainty": "#ff7f0e",                # orange
+    "Original Scheme: Distance": "#ff7f0e", 
+    "Original Scheme: Epistemic": "#2ca02c", 
+    "TM Scheme: Distance": "#ff7f0e",
+    "TM Scheme: Epistemic": "#2ca02c",
     "Epistemic Uncertainty": "#2ca02c",               # green
     "Epistemic and Aleatory Uncertainty": "#d62728",  # red
     "DELTA": "#9467bd",                               # purple
@@ -1039,13 +1043,13 @@ def plot_delta_adaptive_tradeoff(
 if __name__ == "__main__":
     save_path = "/home/trentonjw/Documents/Project/delta_graphs"
 
-    molecule = "hexane"
+    molecule = "methane"
     directory = {"mine": f"/home/trentonjw/Documents/Project/delta_runs/{molecule}_runs",
              "mine_2": f"/home/trentonjw/Documents/Project/delta_runs/low_{molecule}_runs",
              "proxima": "/home/trentonjw/Documents/Project/temp_proxima/proxima_cc/examples/molecule-sampling/runs",
              "proxima_runs": "/home/trentonjw/Documents/Project/proxima_stuff/proxima_runs",
              "pre_final": "/home/trentonjw/Documents/Project/delta_runs/pre_final_runs",
-             "final": "/home/trentonjw/Documents/Project/delta_runs/final_runs",
+             "final": "/home/trentonjw/Documents/Project/delta_runs/final_runs/runs",
              "fin": "/home/trentonjw/Documents/masters_presentation/final_runs/runs",
              "new_test_runs_1": "/home/trentonjw/Documents/Project/delta_runs/new_test_runs_1",
              "new_test_runs_2": "/home/trentonjw/Documents/Project/delta_runs/new_test_runs_2",
@@ -1055,19 +1059,18 @@ if __name__ == "__main__":
              "new_test_runs_6": "/home/trentonjw/Documents/Project/delta_runs/new_test_runs_6",
             }
 
-    # run_names = [("mine", f"mid_finals_baseline_{molecule}", "Baseline"),
-    #          ("mine", f"mid_finals_epistemic_{molecule}", "Proxima"),
-    #          ("mine", f"mid_finals_proxima_{molecule}", "Epistemic Uncertainty"),
-    #          ("mine", f"mid_finals_epistemic_aleatory_{molecule}", "Epistemic and Aleatory Uncertainty"),
-    #         ]
-
-
-    run_names = [
-            #  ("mine", f"mid_finals_baseline_{molecule}", "Baseline"),
-             ("fin", f"final_baseline_{molecule}", "Baseline"),
-             ("new_test_runs_1", f"new_changes_proxima_{molecule}", "Distance Uncertainty"),
-             ("new_test_runs_2", f"new_changes_epistemic_{molecule}", "Epistemic Uncertainty"),
+    run_names = [("fin", f"final_baseline_{molecule}", "Baseline"),
+             ("final", f"audit_epistemic_tm_{molecule}", "TM Scheme: Epistemic"),
+             ("final", f"audit_proxima_tm_{molecule}", "TM Scheme: Distance"),
             ]
+
+
+    # run_names = [
+    #         #  ("mine", f"mid_finals_baseline_{molecule}", "Baseline"),
+    #          ("fin", f"final_baseline_{molecule}", "Baseline"),
+    #          ("new_test_runs_1", f"new_changes_proxima_{molecule}", "Distance Uncertainty"),
+    #          ("new_test_runs_2", f"new_changes_epistemic_{molecule}", "Epistemic Uncertainty"),
+    #         ]
 
     y_lim = {"methane": (.272, .28), "ethanol": (1.125,1.150), "butane": (1.485,1.51), "hexane": (2.075, 2.1)}
 
@@ -1080,7 +1083,7 @@ if __name__ == "__main__":
         y_lim=y_lim[molecule],
         # outlier_threshold= (1.485,1.51),
         colors=DEFAULT_COLORS,
-        show=False,  # don’t pop windows, just save files
+        show=True,  # don’t pop windows, just save files
     )
 
     # proxima_dir ="/home/trentonjw/Documents/Project/delta_runs/methane_runs/mid_finals_proxima_methane"
